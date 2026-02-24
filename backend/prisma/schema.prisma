@@ -1,0 +1,353 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  SPECIAL_EDUCATOR
+  SCHOOL_VIEWER
+  CENTER_ADMIN
+  SYSTEM_ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum SessionStatus {
+  DRAFT
+  IN_PROGRESS
+  SUBMITTED
+  REPORT_READY
+  ARCHIVED
+}
+
+enum AiStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum TierLevel {
+  TIER_1
+  TIER_2
+  TIER_3
+}
+
+enum AnomalySeverity {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum EscalationStatus {
+  PENDING
+  TRANSFERRED
+  FAILED
+}
+
+// ============================================================
+// USERS & AUTH
+// ============================================================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  educatorProfile     EducatorProfile?
+  schoolViewerProfile SchoolViewerProfile?
+  centerAdminProfile  CenterAdminProfile?
+
+  @@map("users")
+}
+
+model EducatorProfile {
+  id       String @id @default(cuid())
+  userId   String @unique
+  name     String
+  schoolId String
+  centerId String
+
+  user     User                @relation(fields: [userId], references: [id])
+  school   School              @relation(fields: [schoolId], references: [id])
+  center   Center              @relation(fields: [centerId], references: [id])
+  sessions ScreeningSession[]
+
+  @@map("educator_profiles")
+}
+
+model SchoolViewerProfile {
+  id       String @id @default(cuid())
+  userId   String @unique
+  name     String
+  schoolId String
+
+  user   User   @relation(fields: [userId], references: [id])
+  school School @relation(fields: [schoolId], references: [id])
+
+  @@map("school_viewer_profiles")
+}
+
+model CenterAdminProfile {
+  id       String @id @default(cuid())
+  userId   String @unique
+  name     String
+  centerId String
+
+  user   User   @relation(fields: [userId], references: [id])
+  center Center @relation(fields: [centerId], references: [id])
+
+  @@map("center_admin_profiles")
+}
+
+// ============================================================
+// SCHOOLS & CENTERS
+// ============================================================
+
+model Center {
+  id   String @id @default(cuid())
+  name String
+
+  schools       School[]
+  educators     EducatorProfile[]
+  adminProfiles CenterAdminProfile[]
+
+  @@map("centers")
+}
+
+model School {
+  id       String @id @default(cuid())
+  name     String
+  centerId String
+
+  center         Center              @relation(fields: [centerId], references: [id])
+  educators      EducatorProfile[]
+  sessions       ScreeningSession[]
+  viewerProfiles SchoolViewerProfile[]
+
+  @@map("schools")
+}
+
+// ============================================================
+// SCREENING SESSIONS
+// ============================================================
+
+model ScreeningSession {
+  id             String        @id @default(cuid())
+  educatorId     String
+  schoolId       String
+  grade          String
+  section        String
+  className      String?
+  assessmentDate DateTime
+  totalStudents  Int           @default(0)
+  status         SessionStatus @default(DRAFT)
+  aiStatus       AiStatus      @default(PENDING)
+
+  // AI-generated fields (Phase 2)
+  classNarrative  String?
+  priorityActions Json?
+  schoolSummary   String?
+  anomalySummary  String?
+
+  // Assessment template from uploaded booklet (Phase 6)
+  // Stores: sections, questions, domainMaxScores, scoring rubric
+  assessmentTemplate Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  educator  EducatorProfile    @relation(fields: [educatorId], references: [id])
+  school    School             @relation(fields: [schoolId], references: [id])
+  students  ScreeningStudent[]
+  anomalies AnomalyFlag[]
+  questions AssessmentQuestion[]
+
+  @@index([educatorId])
+  @@index([status])
+  @@map("screening_sessions")
+}
+
+// ============================================================
+// STUDENTS
+// ============================================================
+
+model ScreeningStudent {
+  id            String   @id @default(cuid())
+  sessionId     String
+  studentName   String
+  dateOfBirth   DateTime
+  age           Int
+  grade         String
+  section       String
+  gender        Gender
+  schoolName    String
+  parentName    String
+  contactNumber String
+  studentRef    String
+  motherTongue  String?
+  healthNotes   String?
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  session       ScreeningSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  scores        ScreeningScore?
+  tierAlloc     TierAllocation?
+  escalation    Escalation?
+  quizResponses StudentQuizResponse[]
+
+  @@index([sessionId])
+  @@map("screening_students")
+}
+
+// ============================================================
+// SCORES
+// ============================================================
+
+model ScreeningScore {
+  id              String  @id @default(cuid())
+  studentId       String  @unique
+  readingRaw      Int
+  readingMax      Int
+  readingPct      Float
+  readingCompRaw  Int
+  readingCompMax  Int
+  readingCompPct  Float
+  spellingRaw     Int
+  spellingMax     Int
+  spellingPct     Float
+  numeracyRaw     Int
+  numeracyMax     Int
+  numeracyPct     Float
+  writingRaw      Int
+  writingMax      Int
+  writingPct      Float
+  weightedAverage Float
+  attentionFlag   Boolean  @default(false)
+  behaviouralFlag Boolean  @default(false)
+  scoredAt        DateTime @default(now())
+
+  student ScreeningStudent @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("screening_scores")
+}
+
+// ============================================================
+// TIER ALLOCATIONS
+// ============================================================
+
+model TierAllocation {
+  id                   String     @id @default(cuid())
+  studentId            String     @unique
+  tier                 TierLevel
+  rationale            String?
+  interventions        Json?
+  educatorObservations  String?
+  observationSuggestions Json?
+  isOverridden         Boolean    @default(false)
+  overrideTier         TierLevel?
+  overrideReason       String?
+  overriddenAt         DateTime?
+  overriddenByEducator String?
+  allocatedAt          DateTime   @default(now())
+
+  student ScreeningStudent @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("tier_allocations")
+}
+
+// ============================================================
+// ANOMALY FLAGS
+// ============================================================
+
+model AnomalyFlag {
+  id          String          @id @default(cuid())
+  sessionId   String
+  studentName String
+  issue       String
+  severity    AnomalySeverity
+  detectedAt  DateTime        @default(now())
+
+  session ScreeningSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("anomaly_flags")
+}
+
+// ============================================================
+// ESCALATIONS
+// ============================================================
+
+model Escalation {
+  id                 String           @id @default(cuid())
+  studentId          String           @unique
+  escalatedBy        String
+  escalatedAt        DateTime         @default(now())
+  referralNote       String?
+  priorityAreas      Json?
+  targetToolIntakeId String?
+  status             EscalationStatus @default(PENDING)
+
+  student ScreeningStudent @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@map("escalations")
+}
+
+// ============================================================
+// ASSESSMENT QUESTIONS (from uploaded booklets)
+// ============================================================
+
+model AssessmentQuestion {
+  id           String  @id @default(cuid())
+  sessionId    String
+  domain       String            // reading, readingComp, spelling, numeracy, writing
+  sectionTitle String
+  partLabel    String?
+  questionIdx  Int               // order within section
+  questionText String            // the actual question/word/problem
+  questionType String            // word_read, comprehension, spelling, math, writing
+  maxScore     Int    @default(1)
+  passageText  String?
+  instructions String?
+  correctAnswer String?          // expected answer for auto-scoring
+
+  session   ScreeningSession      @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  responses StudentQuizResponse[]
+
+  @@index([sessionId])
+  @@map("assessment_questions")
+}
+
+// ============================================================
+// STUDENT QUIZ RESPONSES
+// ============================================================
+
+model StudentQuizResponse {
+  id         String   @id @default(cuid())
+  studentId  String
+  questionId String
+  response   String              // student's typed answer
+  isCorrect  Boolean  @default(false)
+  score      Int      @default(0)
+  answeredAt DateTime @default(now())
+
+  student  ScreeningStudent   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  question AssessmentQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, questionId])
+  @@map("student_quiz_responses")
+}
